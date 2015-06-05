@@ -9,8 +9,6 @@ from urllib2 import urlopen
 
 CONF_DIR = '/etc/nginx/sites-enabled'
 CONF_SOURCE_DIR = '/var/nginx/conf'
-shutil.rmtree(CONF_DIR)
-os.makedirs(CONF_DIR)
 upstream = []
 
 parser = argparse.ArgumentParser(description="Run an nginx site")
