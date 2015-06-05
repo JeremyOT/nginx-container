@@ -1,0 +1,87 @@
+#!/usr/bin/env python
+import shutil
+import sys
+import argparse
+import json
+import os
+from time import sleep
+from urllib2 import urlopen
+
+CONF_DIR = '/etc/nginx/sites-enabled'
+CONF_SOURCE_DIR = '/var/nginx/conf'
+shutil.rmtree(CONF_DIR)
+os.makedirs(CONF_DIR)
+upstream = []
+
+parser = argparse.ArgumentParser(description="Run an nginx site")
+parser.add_argument('--upstream', default='', help='Dynamically set upstream servers')
+parser.add_argument('--etcd-url', dest='etcd_url', default='', help='The etcd url to pull config from. If present, --upstream is ignored')
+parser.add_argument('--etcd-conf-key', dest='etcd_conf_key', default='/v2/keys/config/nginx', help='The key to pull config from.')
+parser.add_argument('--etcd-output-file', dest='etcd_output_file', default='service', help='The name to use when saving the conf from etcd.')
+parser.add_argument('--etcd-ssl-cert-key', dest='etcd_ssl_cert_key', default='', help='The key to pull an SSL cert from.')
+parser.add_argument('--etcd-ssl-cert-key-key', dest='etcd_ssl_cert_key_key', default='', help='The key to pull the key to an SSL cert from.')
+parser.add_argument('--ssl-cert-file', dest='ssl_cert_file', default='/var/nginx/security/service.crt', help='Where to save the ssl cert.')
+parser.add_argument('--ssl-cert-key-file', dest='ssl_cert_key_file', default='/var/nginx/security/service.key', help='Where to save the key to the ssl cert.')
+options = parser.parse_args()
+
+def fast_print(args):
+  print args
+  sys.stdout.flush()
+
+upstream = ''
+if options.upstream:
+  upstream = options.upstream.split('=')[1].split(',')
+
+def get_data(label, key):
+  for conf_retry in xrange(1, 6):
+    try:
+      url = '%s%s' % (options.etcd_url, key)
+      fast_print('Loading %s from %s' % (label, url))
+      conf = json.loads(urlopen(url).read())['node']['value']
+      return conf
+    except Exception as e:
+      fast_print("Error loading %s: %s" % (label, e))
+      sleep(conf_retry ** 2)
+  raise e
+
+def replace_upstream(conf_file, conf_data):
+  if not upstream:
+    return conf_data
+  conf = conf_data.split('\n')
+  upstream_start = -1
+  upstream_end = -1
+  for i, l in enumerate(conf):
+    if l.strip().startswith('upstream'):
+      upstream_start = i
+    if upstream_start > -1 and l.strip().startswith('}'):
+      upstream_end = i
+      break
+  if upstream_start > -1 and upstream:
+    source_conf = conf
+    conf = source_conf[:upstream_start+1]
+    for h in upstream:
+      conf.append('server %s;' % h)
+    conf.extend(source_conf[upstream_end:])
+    fast_print('Set upstream for %s: %s' % (conf_file, upstream))
+  return '\n'.join(conf)
+
+if options.etcd_url:
+  conf = get_data('config', options.etcd_conf_key)
+  conf = replace_upstream('ETCD_CONF', conf)
+  conf_file = os.path.join(CONF_DIR, options.etcd_output_file)
+  with open(conf_file, 'wb') as f:
+    f.write(conf)
+    fast_print('Loaded conf from %s. Saved to %s' % (options.etcd_conf_key, conf_file))
+    fast_print(conf)
+  if options.etcd_ssl_cert_key:
+    with open(options.ssl_cert_file, 'wb') as f:
+      f.write(get_data('SSL cert', options.etcd_ssl_cert_key))
+    with open(options.ssl_cert_key_file, 'wb') as f:
+      f.write(get_data('SSL key', options.etcd_ssl_cert_key_key))
+else:
+  for conf_file in os.listdir(CONF_SOURCE_DIR):
+    with open(os.path.join(CONF_SOURCE_DIR, conf_file), 'rb') as f:
+      conf = f.read()
+    conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf)
+    with open(os.path.join(CONF_DIR, conf_file), 'wb') as f:
+      f.write(''.join(conf))
