@@ -6,5 +6,5 @@ RUN echo "daemon off;" >> /etc/nginx/nginx.conf
 COPY scripts /etc/nginx/scripts
 EXPOSE 80
 EXPOSE 443
-VOLUME ["/var/log/nginx", "/var/nginx/conf", "/var/nginx/security", "/var/nginx/site"]
+VOLUME ["/var/log/nginx", "/var/nginx/conf", "/var/nginx/security", "/var/nginx/site", "/etc/nginx/sites-enabled"]
 ENTRYPOINT ["/etc/nginx/scripts/run-nginx"]

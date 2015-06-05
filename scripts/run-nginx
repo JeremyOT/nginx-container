@@ -1,5 +1,4 @@
 #!/bin/sh
 SCRIPT_DIR=`dirname $0`
 cd $SCRIPT_DIR
-./update-config $@
-nginx
+./update-config $@ && nginx
