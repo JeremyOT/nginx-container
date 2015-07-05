@@ -4,45 +4,34 @@ import sys
 import argparse
 import json
 import os
+import hashlib
+import subprocess
+from traceback import format_exc
 from time import sleep
 from urllib2 import urlopen
 
 CONF_DIR = '/etc/nginx/sites-enabled'
 CONF_SOURCE_DIR = '/var/nginx/conf'
-upstream = []
-
-parser = argparse.ArgumentParser(description="Run an nginx site")
-parser.add_argument('--upstream', default='', help='Dynamically set upstream servers')
-parser.add_argument('--etcd-url', dest='etcd_url', default='', help='The etcd url to pull config from. If present, --upstream is ignored')
-parser.add_argument('--etcd-conf-key', dest='etcd_conf_key', default='/v2/keys/config/nginx', help='The key to pull config from.')
-parser.add_argument('--etcd-output-file', dest='etcd_output_file', default='service', help='The name to use when saving the conf from etcd.')
-parser.add_argument('--etcd-ssl-cert-key', dest='etcd_ssl_cert_key', default='', help='The key to pull an SSL cert from.')
-parser.add_argument('--etcd-ssl-cert-key-key', dest='etcd_ssl_cert_key_key', default='', help='The key to pull the key to an SSL cert from.')
-parser.add_argument('--ssl-cert-file', dest='ssl_cert_file', default='/var/nginx/security/service.crt', help='Where to save the ssl cert.')
-parser.add_argument('--ssl-cert-key-file', dest='ssl_cert_key_file', default='/var/nginx/security/service.key', help='Where to save the key to the ssl cert.')
-options = parser.parse_args()
 
 def fast_print(args):
   print args
   sys.stdout.flush()
 
-upstream = ''
-if options.upstream:
-  upstream = options.upstream.split('=')[1].split(',')
-
 def get_data(label, key):
   for conf_retry in xrange(1, 6):
     try:
       url = '%s%s' % (options.etcd_url, key)
-      fast_print('Loading %s from %s' % (label, url))
-      conf = json.loads(urlopen(url).read())['node']['value']
+      conf = json.load(urlopen(url))['node']['value']
       return conf
     except Exception as e:
       fast_print("Error loading %s: %s" % (label, e))
       sleep(conf_retry ** 2)
   raise e
 
-def replace_upstream(conf_file, conf_data):
+def get_upstream(upstream_url):
+  return sorted([str(w['value']) for w in json.load(urlopen(upstream_url))['node'].get('nodes', [])])
+
+def replace_upstream(conf_file, conf_data, upstream):
   if not upstream:
     return conf_data
   conf = conf_data.split('\n')
@@ -60,26 +49,78 @@ def replace_upstream(conf_file, conf_data):
     for h in upstream:
       conf.append('server %s;' % h)
     conf.extend(source_conf[upstream_end:])
-    fast_print('Set upstream for %s: %s' % (conf_file, upstream))
   return '\n'.join(conf)
 
-if options.etcd_url:
-  conf = get_data('config', options.etcd_conf_key)
-  conf = replace_upstream('ETCD_CONF', conf)
-  conf_file = os.path.join(CONF_DIR, options.etcd_output_file)
+def write_conf(conf_file, conf, previous_hash=None):
+  sha = hashlib.sha256(conf).hexdigest()
+  if sha == previous_hash:
+    return sha
   with open(conf_file, 'wb') as f:
     f.write(conf)
-    fast_print('Loaded conf from %s. Saved to %s' % (options.etcd_conf_key, conf_file))
-    fast_print(conf)
-  if options.etcd_ssl_cert_key:
-    with open(options.ssl_cert_file, 'wb') as f:
-      f.write(get_data('SSL cert', options.etcd_ssl_cert_key))
-    with open(options.ssl_cert_key_file, 'wb') as f:
-      f.write(get_data('SSL key', options.etcd_ssl_cert_key_key))
-else:
-  for conf_file in os.listdir(CONF_SOURCE_DIR):
-    with open(os.path.join(CONF_SOURCE_DIR, conf_file), 'rb') as f:
-      conf = f.read()
-    conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf)
-    with open(os.path.join(CONF_DIR, conf_file), 'wb') as f:
-      f.write(''.join(conf))
+    print 'Updated %s: %s' % (conf_file, sha)
+  return sha
+
+def load_config(options, previous_hash={}):
+  upstream = []
+  if options.upstream:
+    upstream = options.upstream.split('=')[1].split(',')
+  if options.etcd_url:
+    changed = False
+    current_hash = {}
+    conf = get_data('config', options.etcd_conf_key)
+    if options.etcd_upstream_key:
+      upstream = get_upstream('%s%s' % (options.etcd_url, options.etcd_upstream_key))
+    if options.etcd_upstream_key or options.upstream:
+      conf = replace_upstream('ETCD_CONF', conf, upstream)
+    conf_file = os.path.join(CONF_DIR, options.etcd_output_file)
+    current_hash['conf'] = write_conf(conf_file, conf, previous_hash.get('conf'))
+    if current_hash['conf'] != previous_hash.get('conf'):
+      fast_print('Loaded conf from %s. Saved to %s' % (options.etcd_conf_key, conf_file))
+      if options.etcd_upstream_key or options.upstream:
+        fast_print('Upstream: %s' % upstream)
+    if options.etcd_ssl_cert_key:
+      current_hash['ssl_cert'] = write_conf(options.ssl_cert_file, get_data('SSL cert', options.etcd_ssl_cert_key), previous_hash.get('ssl_cert'))
+      current_hash['ssl_key'] = write_conf(options.ssl_cert_key_file, get_data('SSL key', options.etcd_ssl_cert_key_key), previous_hash.get('ssl_key'))
+    for k in current_hash:
+      if current_hash[k] != previous_hash.get(k):
+        changed = True
+        break
+    return changed, current_hash
+  else:
+    for conf_file in os.listdir(CONF_SOURCE_DIR):
+      with open(os.path.join(CONF_SOURCE_DIR, conf_file), 'rb') as f:
+        conf = f.read()
+      conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf, upstream)
+      with open(os.path.join(CONF_DIR, conf_file), 'wb') as f:
+        f.write(''.join(conf))
+
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser(description="Run an nginx site")
+  parser.add_argument('--upstream', default='', help='Dynamically set upstream servers')
+  parser.add_argument('--etcd-upstream-key', dest='etcd_upstream_key', default='', help='Dynamically set upstream servers')
+  parser.add_argument('--etcd-url', dest='etcd_url', default='', help='The etcd url to pull config from. If present, --upstream is ignored')
+  parser.add_argument('--etcd-conf-key', dest='etcd_conf_key', default='/v2/keys/config/nginx', help='The key to pull config from.')
+  parser.add_argument('--etcd-output-file', dest='etcd_output_file', default='service', help='The name to use when saving the conf from etcd.')
+  parser.add_argument('--etcd-ssl-cert-key', dest='etcd_ssl_cert_key', default='', help='The key to pull an SSL cert from.')
+  parser.add_argument('--etcd-ssl-cert-key-key', dest='etcd_ssl_cert_key_key', default='', help='The key to pull the key to an SSL cert from.')
+  parser.add_argument('--ssl-cert-file', dest='ssl_cert_file', default='/var/nginx/security/service.crt', help='Where to save the ssl cert.')
+  parser.add_argument('--ssl-cert-key-file', dest='ssl_cert_key_file', default='/var/nginx/security/service.key', help='Where to save the key to the ssl cert.')
+  parser.add_argument('--monitor-interval', dest='monitor_interval', default=0.0, type=float, help='If > 0, the script will run this often (in seconds) and will call `nginx -s reload` if there is a config change.')
+  options = parser.parse_args()
+  _, config_hash = load_config(options)
+  if options.monitor_interval > 0:
+    pid = os.fork()
+    if pid != 0:
+      print 'Running monitor id %s' % pid
+    else:
+      while True:
+        sleep(options.monitor_interval)
+        try:
+          changed, config_hash = load_config(options, config_hash)
+          if changed:
+            print 'Config updated'
+            subprocess.Popen(['nginx', '-s', 'reload'], stdout=subprocess.PIPE)
+            print 'Nginx reloaded'
+        except Exception as e:
+          print 'Failed to load config: %s' % e
+          print format_exc()
