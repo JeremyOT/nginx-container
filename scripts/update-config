@@ -60,7 +60,27 @@ def write_conf(conf_file, conf, previous_hash=None):
     print 'Updated %s: %s' % (conf_file, sha)
   return sha
 
-def load_config(options, previous_hash={}):
+def make_replace_map(replace_list, splitter=':'):
+  replace_map = {}
+  for r in replace_list:
+    pair = ['','']
+    part = 0
+    split_string = r.split(splitter)
+    if len(split_string) < 2:
+      continue
+    for i, s in enumerate(split_string):
+      if s:
+        if i > 0 and split_string[i-1]:
+          part += 1
+          if part > len(pair):
+            break
+        pair[part] += s
+      else:
+        pair[part] += splitter
+    replace_map[pair[0]] = pair[1]
+  return replace_map 
+
+def load_config(options, previous_hash={}, replace_map={}):
   upstream = []
   if options.upstream:
     upstream = options.upstream.split('=')[1].split(',')
@@ -72,6 +92,9 @@ def load_config(options, previous_hash={}):
       upstream = get_upstream('%s%s' % (options.etcd_url, options.etcd_upstream_key))
     if options.etcd_upstream_key or options.upstream:
       conf = replace_upstream('ETCD_CONF', conf, upstream)
+    if replace_map:
+      for k, v in replace_map:
+        conf = conf.replace(k, v)
     conf_file = os.path.join(CONF_DIR, options.etcd_output_file)
     current_hash['conf'] = write_conf(conf_file, conf, previous_hash.get('conf'))
     if current_hash['conf'] != previous_hash.get('conf'):
@@ -91,6 +114,9 @@ def load_config(options, previous_hash={}):
       with open(os.path.join(CONF_SOURCE_DIR, conf_file), 'rb') as f:
         conf = f.read()
       conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf, upstream)
+      if replace_map:
+        for k, v in replace_map:
+          conf = conf.replace(k, v)
       with open(os.path.join(CONF_DIR, conf_file), 'wb') as f:
         f.write(''.join(conf))
 
@@ -105,9 +131,13 @@ if __name__ == '__main__':
   parser.add_argument('--etcd-ssl-cert-key-key', dest='etcd_ssl_cert_key_key', default='', help='The key to pull the key to an SSL cert from.')
   parser.add_argument('--ssl-cert-file', dest='ssl_cert_file', default='/var/nginx/security/service.crt', help='Where to save the ssl cert.')
   parser.add_argument('--ssl-cert-key-file', dest='ssl_cert_key_file', default='/var/nginx/security/service.key', help='Where to save the key to the ssl cert.')
+  parser.add_argument('--replace', dest='replace', action='append', help='Optionally configure the updater to replace text within the output. Takes an arugment like old_text:new_text. To include a literal colon, use a double colon. (:: -> :)')
   parser.add_argument('--monitor-interval', dest='monitor_interval', default=0.0, type=float, help='If > 0, the script will run this often (in seconds) and will call `nginx -s reload` if there is a config change.')
   options = parser.parse_args()
-  _, config_hash = load_config(options)
+
+  replace_map = make_replace_map(options.replace)
+
+  _, config_hash = load_config(options, replace_map=replace_map)
   if options.monitor_interval > 0:
     pid = os.fork()
     if pid != 0:
@@ -116,7 +146,7 @@ if __name__ == '__main__':
       while True:
         sleep(options.monitor_interval)
         try:
-          changed, config_hash = load_config(options, config_hash)
+          changed, config_hash = load_config(options, config_hash, replace_map=replace_map)
           if changed:
             print 'Config updated'
             subprocess.Popen(['nginx', '-s', 'reload'], stdout=subprocess.PIPE)
