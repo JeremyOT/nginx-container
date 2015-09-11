@@ -31,7 +31,7 @@ def get_data(label, key):
 def get_upstream(upstream_url):
   return sorted([str(w['value']) for w in json.load(urlopen(upstream_url))['node'].get('nodes', [])])
 
-def replace_upstream(conf_file, conf_data, upstream):
+def replace_upstream(conf_file, conf_data, upstream, section_id=''):
   if not upstream:
     return conf_data
   conf = conf_data.split('\n')
@@ -39,6 +39,8 @@ def replace_upstream(conf_file, conf_data, upstream):
   upstream_end = -1
   for i, l in enumerate(conf):
     if l.strip().startswith('upstream'):
+      if section_id and l.split()[1] != section_id:
+          continue
       upstream_start = i
     if upstream_start > -1 and l.strip().startswith('}'):
       upstream_end = i
@@ -82,16 +84,24 @@ def make_replace_map(replace_list, splitter=':'):
 
 def load_config(options, previous_hash={}, replace_map={}):
   upstream = []
+  upstream_sections = {}
   if options.upstream:
-    upstream = options.upstream.split('=')[1].split(',')
+    upstream = options.upstream.split(',')
+  if options.upstream_sections:
+    upstream_sections = {k: v.split(',') for k, v in (i.split(':', 1) for i in options.upstream_sections)}
   if options.etcd_url:
     changed = False
     current_hash = {}
     conf = get_data('config', options.etcd_conf_key)
     if options.etcd_upstream_key:
       upstream = get_upstream('%s%s' % (options.etcd_url, options.etcd_upstream_key))
+    if options.etcd_upstream_section_keys:
+      upstream_sections = {k: get_upstream('%s%s' % (options.etcd_url, v)) for k,v in (i.split(':', 1) for i in options.upstream_sections)}
     if options.etcd_upstream_key or options.upstream:
       conf = replace_upstream('ETCD_CONF', conf, upstream)
+    if options.etcd_upstream_section_keys or options.upstream_section:
+      for k, v in upstream_sections:
+        conf = replace_upstream('ETCD_CONF', conf, v, k)
     if replace_map:
       for k, v in replace_map:
         conf = conf.replace(k, v)
@@ -114,6 +124,8 @@ def load_config(options, previous_hash={}, replace_map={}):
       with open(os.path.join(CONF_SOURCE_DIR, conf_file), 'rb') as f:
         conf = f.read()
       conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf, upstream)
+      for k, v in upstream_sections:
+        conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf, v, k)
       if replace_map:
         for k, v in replace_map:
           conf = conf.replace(k, v)
@@ -123,7 +135,9 @@ def load_config(options, previous_hash={}, replace_map={}):
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(description="Run an nginx site")
   parser.add_argument('--upstream', default='', help='Dynamically set upstream servers')
+  parser.add_argument('--upstream-section', dest='upstream_sections' action='append', help='Dynamically set upstream servers using key value pairs. section_id:values')
   parser.add_argument('--etcd-upstream-key', dest='etcd_upstream_key', default='', help='Dynamically set upstream servers')
+  parser.add_argument('--etcd-upstream-section-key', dest='etcd_upstream_section_keys', action='append', help='Dynamically set upstream servers by name. Use upstream_id:etcd_url as the value. Can be passed multiple times.')
   parser.add_argument('--etcd-url', dest='etcd_url', default='', help='The etcd url to pull config from. If present, --upstream is ignored')
   parser.add_argument('--etcd-conf-key', dest='etcd_conf_key', default='/v2/keys/config/nginx', help='The key to pull config from.')
   parser.add_argument('--etcd-output-file', dest='etcd_output_file', default='service', help='The name to use when saving the conf from etcd.')
