@@ -102,7 +102,7 @@ def load_config(options, previous_hash={}, replace_map={}):
     if options.etcd_upstream_key or options.upstream:
       conf = replace_upstream('ETCD_CONF', conf, upstream)
     if options.etcd_upstream_section_keys or options.upstream_sections:
-      for k, v in upstream_sections:
+      for k, v in upstream_sections.iteritems():
         conf = replace_upstream('ETCD_CONF', conf, v, k)
     if replace_map:
       for k, v in replace_map.iteritems():
