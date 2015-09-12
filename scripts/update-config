@@ -133,6 +133,7 @@ def load_config(options, previous_hash={}, replace_map={}):
           conf = conf.replace(k, v)
       with open(os.path.join(CONF_DIR, conf_file), 'wb') as f:
         f.write(''.join(conf))
+    return None, None
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(description="Run an nginx site")
