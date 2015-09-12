@@ -135,7 +135,7 @@ def load_config(options, previous_hash={}, replace_map={}):
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(description="Run an nginx site")
   parser.add_argument('--upstream', default='', help='Dynamically set upstream servers')
-  parser.add_argument('--upstream-section', dest='upstream_sections' action='append', help='Dynamically set upstream servers using key value pairs. section_id:values')
+  parser.add_argument('--upstream-section', dest='upstream_sections', action='append', help='Dynamically set upstream servers using key value pairs. section_id:values')
   parser.add_argument('--etcd-upstream-key', dest='etcd_upstream_key', default='', help='Dynamically set upstream servers')
   parser.add_argument('--etcd-upstream-section-key', dest='etcd_upstream_section_keys', action='append', help='Dynamically set upstream servers by name. Use upstream_id:etcd_url as the value. Can be passed multiple times.')
   parser.add_argument('--etcd-url', dest='etcd_url', default='', help='The etcd url to pull config from. If present, --upstream is ignored')
