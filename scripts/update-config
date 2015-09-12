@@ -98,7 +98,7 @@ def load_config(options, previous_hash={}, replace_map={}):
     if options.etcd_upstream_key:
       upstream = get_upstream('%s%s' % (options.etcd_url, options.etcd_upstream_key))
     if options.etcd_upstream_section_keys:
-      upstream_sections = {k: get_upstream('%s%s' % (options.etcd_url, v)) for k,v in (i.split(':', 1) for i in options.upstream_sections)}
+      upstream_sections = {k: get_upstream('%s%s' % (options.etcd_url, v)) for k,v in (i.split(':', 1) for i in options.etcd_upstream_section_keys)}
     if options.etcd_upstream_key or options.upstream:
       conf = replace_upstream('ETCD_CONF', conf, upstream)
     if options.etcd_upstream_section_keys or options.upstream_sections:
