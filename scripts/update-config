@@ -64,6 +64,8 @@ def write_conf(conf_file, conf, previous_hash=None):
 
 def make_replace_map(replace_list, splitter=':'):
   replace_map = {}
+  if not replace_list:
+    return replace_map
   for r in replace_list:
     pair = ['','']
     part = 0
