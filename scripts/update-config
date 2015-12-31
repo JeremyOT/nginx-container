@@ -9,7 +9,6 @@ import subprocess
 from traceback import format_exc
 from time import sleep
 from urllib2 import urlopen
-from random import random
 
 CONF_DIR = '/etc/nginx/sites-enabled'
 CONF_SOURCE_DIR = '/var/nginx/conf'
@@ -19,15 +18,14 @@ def fast_print(args):
   sys.stdout.flush()
 
 def get_data(label, key):
-  for conf_retry in xrange(1, 10000):
+  for conf_retry in xrange(1, 6):
     try:
       url = '%s%s' % (options.etcd_url, key)
       conf = json.load(urlopen(url))['node']['value']
       return conf
     except Exception as e:
-      sleep_time = random() * (min(conf_retry, 5) ** 2)
-      fast_print("Error loading %s (Retrying in %s seconds): %s" % (label, sleep_time, e))
-      sleep(sleep_time)
+      fast_print("Error loading %s: %s" % (label, e))
+      sleep(conf_retry ** 2)
   raise e
 
 def get_upstream(upstream_url):
