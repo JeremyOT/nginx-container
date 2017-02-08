@@ -11,6 +11,7 @@ from time import sleep
 from urllib2 import urlopen
 
 CONF_DIR = '/etc/nginx/sites-enabled'
+MAIN_SCOPE_CONF_DIR = '/etc/nginx/main-scope-conf'
 CONF_SOURCE_DIR = '/var/nginx/conf'
 
 def fast_print(args):
@@ -107,7 +108,7 @@ def load_config(options, previous_hash={}, replace_map={}):
     if replace_map:
       for k, v in replace_map.iteritems():
         conf = conf.replace(k, v)
-    conf_file = os.path.join(CONF_DIR, options.etcd_output_file)
+    conf_file = os.path.join(options.set_main_scope and MAIN_SCOPE_CONF_DIR or CONF_DIR, options.etcd_output_file)
     current_hash['conf'] = write_conf(conf_file, conf, previous_hash.get('conf'))
     if current_hash['conf'] != previous_hash.get('conf'):
       fast_print('Loaded conf from %s. Saved to %s' % (options.etcd_conf_key, conf_file))
@@ -131,7 +132,7 @@ def load_config(options, previous_hash={}, replace_map={}):
       if replace_map:
         for k, v in replace_map:
           conf = conf.replace(k, v)
-      with open(os.path.join(CONF_DIR, conf_file), 'wb') as f:
+      with open(os.path.join(options.set_main_scope and MAIN_SCOPE_CONF_DIR or CONF_DIR, conf_file), 'wb') as f:
         f.write(''.join(conf))
     return None, None
 
@@ -141,6 +142,7 @@ if __name__ == '__main__':
   parser.add_argument('--upstream-section', dest='upstream_sections', action='append', help='Dynamically set upstream servers using key value pairs. section_id:values')
   parser.add_argument('--etcd-upstream-key', dest='etcd_upstream_key', default='', help='Dynamically set upstream servers')
   parser.add_argument('--etcd-upstream-section-key', dest='etcd_upstream_section_keys', action='append', help='Dynamically set upstream servers by name. Use upstream_id:etcd_url as the value. Can be passed multiple times.')
+  parser.add_argument('--set-main-scope', dest='set_main_scope', default=False, help='Treat the retrieved config as top-level config (outside of the http scope)')
   parser.add_argument('--etcd-url', dest='etcd_url', default='', help='The etcd url to pull config from. If present, --upstream is ignored')
   parser.add_argument('--etcd-conf-key', dest='etcd_conf_key', default='/v2/keys/config/nginx', help='The key to pull config from.')
   parser.add_argument('--etcd-output-file', dest='etcd_output_file', default='service', help='The name to use when saving the conf from etcd.')

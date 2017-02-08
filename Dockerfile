@@ -7,7 +7,10 @@ RUN apt-get update && apt-get install python wget -y && \
     wget -q -O- http://nginx.org/keys/nginx_signing.key | apt-key add - && \
     apt-get update && apt-get install nginx -y && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-RUN echo "daemon off;" >> /etc/nginx/nginx.conf; sed -i 's#include /etc/nginx/conf.d/\*.conf#include /etc/nginx/sites-enabled/*#' /etc/nginx/nginx.conf
+RUN echo "daemon off;" >> /etc/nginx/nginx.conf && \
+    sed -i 's#include /etc/nginx/conf.d/\*.conf#include /etc/nginx/sites-enabled/*#' /etc/nginx/nginx.conf && \
+    mkdir /etc/nginx/main-scope-conf && \
+    echo "include /etc/nginx/main-scope-conf/*;" >> /etc/nginx/nginx.conf
 COPY scripts /etc/nginx/scripts
 EXPOSE 80
 EXPOSE 443
