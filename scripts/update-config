@@ -9,11 +9,14 @@ import subprocess
 from traceback import format_exc
 from time import sleep
 from urllib2 import urlopen
+from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 
 CONF_DIR = '/etc/nginx/sites-enabled'
 MAIN_SCOPE_CONF_DIR = '/etc/nginx/main-scope-conf'
 CONF_SOURCE_DIR = '/var/nginx/conf'
 DEFAULT_MAIN_SCOPE_CONF_FILE = 'default'
+
+TEST_DATA={}
 
 def fast_print(args):
   print args
@@ -55,9 +58,13 @@ def replace_upstream(conf_file, conf_data, upstream, section_id=''):
     conf.extend(source_conf[upstream_end:])
   return '\n'.join(conf)
 
-def write_conf(conf_file, conf, previous_hash=None):
+def write_conf(options, conf_file, conf, previous_hash=None):
   sha = hashlib.sha256(conf).hexdigest()
   if sha == previous_hash:
+    return sha
+  if options.test:
+    print 'Writing to %s:\n\n%s' % (conf_file, conf)
+    TEST_DATA[conf_file] = conf
     return sha
   with open(conf_file, 'wb') as f:
     f.write(conf)
@@ -87,9 +94,8 @@ def make_replace_map(replace_list, splitter=':'):
   return replace_map 
 
 def populate_defaults(options):
-  if not options.set_main_scope and not os.listdir(MAIN_SCOPE_CONF_DIR):
-    with open(os.path.join(MAIN_SCOPE_CONF_DIR, DEFAULT_MAIN_SCOPE_CONF_FILE), 'wb') as f:
-      f.write('events {\n  worker_connections %d;\n}\n' % options.worker_connections)
+  if not options.set_main_scope and (options.test or not os.listdir(MAIN_SCOPE_CONF_DIR)):
+    write_conf(options, os.path.join(MAIN_SCOPE_CONF_DIR, DEFAULT_MAIN_SCOPE_CONF_FILE), 'events {\n  worker_connections %d;\n}\n' % options.worker_connections)
 
 def load_config(options, previous_hash={}, replace_map={}):
   upstream = []
@@ -115,14 +121,14 @@ def load_config(options, previous_hash={}, replace_map={}):
       for k, v in replace_map.iteritems():
         conf = conf.replace(k, v)
     conf_file = os.path.join(options.set_main_scope and MAIN_SCOPE_CONF_DIR or CONF_DIR, options.etcd_output_file)
-    current_hash['conf'] = write_conf(conf_file, conf, previous_hash.get('conf'))
+    current_hash['conf'] = write_conf(options, conf_file, conf, previous_hash.get('conf'))
     if current_hash['conf'] != previous_hash.get('conf'):
       fast_print('Loaded conf from %s. Saved to %s' % (options.etcd_conf_key, conf_file))
       if options.etcd_upstream_key or options.upstream:
         fast_print('Upstream: %s' % upstream)
     if options.etcd_ssl_cert_key:
-      current_hash['ssl_cert'] = write_conf(options.ssl_cert_file, get_data('SSL cert', options.etcd_ssl_cert_key), previous_hash.get('ssl_cert'))
-      current_hash['ssl_key'] = write_conf(options.ssl_cert_key_file, get_data('SSL key', options.etcd_ssl_cert_key_key), previous_hash.get('ssl_key'))
+      current_hash['ssl_cert'] = write_conf(options, options.ssl_cert_file, get_data('SSL cert', options.etcd_ssl_cert_key), previous_hash.get('ssl_cert'))
+      current_hash['ssl_key'] = write_conf(options, options.ssl_cert_key_file, get_data('SSL key', options.etcd_ssl_cert_key_key), previous_hash.get('ssl_key'))
     for k in current_hash:
       if current_hash[k] != previous_hash.get(k):
         changed = True
@@ -130,19 +136,98 @@ def load_config(options, previous_hash={}, replace_map={}):
     populate_defaults(options)
     return changed, current_hash
   else:
-    for conf_file in os.listdir(CONF_SOURCE_DIR):
-      with open(os.path.join(CONF_SOURCE_DIR, conf_file), 'rb') as f:
-        conf = f.read()
-      conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf, upstream)
-      for k, v in upstream_sections:
-        conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf, v, k)
-      if replace_map:
-        for k, v in replace_map:
-          conf = conf.replace(k, v)
-      with open(os.path.join(options.set_main_scope and MAIN_SCOPE_CONF_DIR or CONF_DIR, conf_file), 'wb') as f:
-        f.write(''.join(conf))
+    if not options.test:
+      for conf_file in os.listdir(CONF_SOURCE_DIR):
+        with open(os.path.join(CONF_SOURCE_DIR, conf_file), 'rb') as f:
+          conf = f.read()
+        conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf, upstream)
+        for k, v in upstream_sections:
+          conf = replace_upstream(os.path.join(CONF_SOURCE_DIR, conf_file), conf, v, k)
+        if replace_map:
+          for k, v in replace_map:
+            conf = conf.replace(k, v)
+        write_conf(options, os.path.join(options.set_main_scope and MAIN_SCOPE_CONF_DIR or CONF_DIR, conf_file), ''.join(conf))
     populate_defaults(options)
     return None, None
+
+def reload_nginx():
+  if TEST_DATA:
+    return
+  subprocess.Popen(['nginx', '-s', 'reload'], stdout=subprocess.PIPE)
+  print 'Nginx reloaded'
+
+def get_section(path):
+  if len(path) > 0:
+    return path[0], path[1:]
+  return None, []
+
+class ConfigRequestHandler(BaseHTTPRequestHandler):
+  def do_PUT(self):
+    status = 403
+    path = self.path.split('/')[1:]
+    section, path = get_section(path)
+    if section == 'service':
+      section, path = get_section(path)
+      if section == 'upstream':
+        upstream = json.load(self.rfile)
+        section = get_section(path)
+        for conf_file in os.listdir(CONF_DIR):
+          with open(os.path.join(CONF_DIR, conf_file), 'rb') as f:
+            conf = f.read()
+          conf = replace_upstream(os.path.join(CONF_DIR, conf_file), conf, upstream, section)
+          write_conf(options, os.path.join(CONF_DIR, conf_file), ''.join(conf))
+        reload_nginx()
+        self.respond({'success': True})
+        return
+      elif not section:
+        write_conf(options, os.path.join(CONF_DIR, 'main'), self.rfile.read(int(self.headers.getheader('content-length'))))
+        reload_nginx()
+        self.respond({'success': True})
+        return
+    elif section == 'main':
+      section, path = get_section(path)
+      if section == 'upstream':
+        upstream = json.load(self.rfile)
+        section = get_section(path)
+        for conf_file in os.listdir(CONF_DIR):
+          with open(os.path.join(CONF_DIR, conf_file), 'rb') as f:
+            conf = f.read()
+          conf = replace_upstream(os.path.join(CONF_DIR, conf_file), conf, upstream, section)
+          write_conf(options, os.path.join(CONF_DIR, conf_file), ''.join(conf))
+        reload_nginx()
+        self.respond({'success': True})
+        return
+      elif not section:
+        write_conf(options, os.path.join(MAIN_SCOPE_CONF_DIR, 'main'), self.rfile.read(int(self.headers.getheader('content-length'))))
+        reload_nginx()
+        self.respond({'success': True})
+        return
+    self.respond(None)
+
+  def do_GET(self):
+    response = None
+    if TEST_DATA:
+      if self.path == '/':
+        response = {'config': TEST_DATA}
+      elif TEST_DATA.get(self.path, ''):
+        response = {'config': {self.path: TEST_DATA[self.path]}}
+    self.respond(response)
+
+  def respond(self, response, status=0):
+    self.rfile.close()
+    if not status:
+      if response:
+        status = 200
+      else:
+        response = {'error': '%s not found\n' % self.path}
+        status = 404
+    body = json.dumps(response)
+    self.send_response(status)
+    self.send_header('Content-type', 'application/json')
+    self.send_header('Content-Length', str(len(body)))
+    self.end_headers()
+    self.wfile.write(body)
+
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(description="Run an nginx site")
@@ -161,12 +246,20 @@ if __name__ == '__main__':
   parser.add_argument('--replace', dest='replace', action='append', help='Optionally configure the updater to replace text within the output. Takes an arugment like old_text:new_text. To include a literal colon, use a double colon. (:: -> :)')
   parser.add_argument('--worker-connections', dest='worker_connections', default=1024, help='The number of worker connections to configure. Ignored if --set-main-scope is provided.')
   parser.add_argument('--monitor-interval', dest='monitor_interval', default=0.0, type=float, help='If > 0, the script will run this often (in seconds) and will call `nginx -s reload` if there is a config change.')
+  parser.add_argument('--http-port', dest='http_port', default=0, type=int, help='If > 0, an http server will listen for requests on this port. This option is not compatible with etcd based config.')
+  parser.add_argument('--test', default=False, action='store_true', help='If true, config will be printed to std out instead of written to disk.')
   options = parser.parse_args()
 
   replace_map = make_replace_map(options.replace)
 
   _, config_hash = load_config(options, replace_map=replace_map)
-  if options.monitor_interval > 0:
+  if options.http_port:
+    pid = os.fork()
+    if pid != 0:
+      print 'Server id %s listening on %s' % (pid, options.http_port)
+    else:
+      HTTPServer(('', options.http_port), ConfigRequestHandler).serve_forever()
+  elif options.monitor_interval > 0:
     pid = os.fork()
     if pid != 0:
       print 'Running monitor id %s' % pid
@@ -177,8 +270,7 @@ if __name__ == '__main__':
           changed, config_hash = load_config(options, config_hash, replace_map=replace_map)
           if changed:
             print 'Config updated'
-            subprocess.Popen(['nginx', '-s', 'reload'], stdout=subprocess.PIPE)
-            print 'Nginx reloaded'
+            reload_nginx()
         except Exception as e:
           print 'Failed to load config: %s' % e
           print format_exc()
