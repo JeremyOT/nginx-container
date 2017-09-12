@@ -252,6 +252,7 @@ if __name__ == '__main__':
   options = parser.parse_args()
 
   if options.config_file:
+    populate_defaults(options)
     with open(options.config_file, 'rb') as f:
       conf = f.read()
     with open(os.path.join(options.set_main_scope and MAIN_SCOPE_CONF_DIR or CONF_DIR, DEFAULT_MAIN_SCOPE_CONF_FILE), 'wb') as f:
