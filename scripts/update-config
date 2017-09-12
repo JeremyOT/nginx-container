@@ -248,7 +248,16 @@ if __name__ == '__main__':
   parser.add_argument('--monitor-interval', dest='monitor_interval', default=0.0, type=float, help='If > 0, the script will run this often (in seconds) and will call `nginx -s reload` if there is a config change.')
   parser.add_argument('--http-port', dest='http_port', default=0, type=int, help='If > 0, an http server will listen for requests on this port. This option is not compatible with etcd based config.')
   parser.add_argument('--test', default=False, action='store_true', help='If true, config will be printed to std out instead of written to disk.')
+  parser.add_argument('--config-file', dest='config_file', type=str, help='Overrides all other options except --set-main-scope and configures the server with the specified file.')
   options = parser.parse_args()
+
+  if options.config_file:
+    with open(options.config_file, 'rb') as f:
+      conf = f.read()
+    with open(os.path.join(options.set_main_scope and MAIN_SCOPE_CONF_DIR or CONF_DIR, DEFAULT_MAIN_SCOPE_CONF_FILE), 'wb') as f:
+      f.write(conf)
+    print 'Config set with "%s"' % options.config_file
+    exit(0)
 
   replace_map = make_replace_map(options.replace)
 
