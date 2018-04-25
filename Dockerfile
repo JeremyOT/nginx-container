@@ -2,10 +2,10 @@ FROM debian:jessie
 MAINTAINER jeremyot@gmail.com
 
 RUN apt-get update && apt-get install python wget -y && \
-    echo "deb http://nginx.org/packages/mainline/debian/ jessie nginx"  >> /etc/apt/sources.list && \
-    echo "deb-src http://nginx.org/packages/mainline/debian/ jessie nginx" >> /etc/apt/sources.list && \
+    echo "deb http://nginx.org/packages/debian/ jessie nginx"  >> /etc/apt/sources.list && \
+    echo "deb-src http://nginx.org/packages/debian/ jessie nginx" >> /etc/apt/sources.list && \
     wget -q -O- http://nginx.org/keys/nginx_signing.key | apt-key add - && \
-    apt-get update && apt-get install nginx -y && \
+    apt-get update && apt-get install nginx=1.14.0 -y && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 COPY scripts /etc/nginx/scripts
 COPY nginx.conf /etc/nginx/nginx.conf
